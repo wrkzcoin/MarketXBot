@@ -863,9 +863,11 @@ async def sell_process(message, real_amount_sell: float, sell_ticker: str, real_
     buy_ticker = buy_ticker.upper()
     real_amount_sell = round(real_amount_sell, 8)
     real_amount_buy = round(real_amount_buy, 8)
-    sell_div_get = round(real_amount_sell / real_amount_buy, 8)
+    sell_div_get = round(real_amount_sell / real_amount_buy, 16)
     fee_sell = round(TRADE_PERCENT * real_amount_sell, 8)
     fee_buy = round(TRADE_PERCENT * real_amount_buy, 8)
+    if fee_sell == 0: fee_sell = 0.00000100
+    if fee_buy == 0: fee_buy = 0.00000100
     # Check if user already have another open order with the same rate
     # Check if user make a sell process of his buy coin which already in open order
     check_if_same_rate = await store.sql_get_order_by_sellerid_pair_rate('TELEGRAM', message.from_user.username, sell_ticker, 
