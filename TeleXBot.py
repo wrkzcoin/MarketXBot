@@ -525,11 +525,13 @@ async def start_cmd_handler(message: types.Message):
                 if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                     table_data.append([num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'] + "\nFor "+ 
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 else:
                     table_data.append([num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'] + "\nFor " +
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 if list_numb > 20:
                     break
             table = AsciiTable(table_data)
@@ -588,11 +590,13 @@ async def start_cmd_handler(message: types.Message):
                 if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                     table_data.append([num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'] + "\nFor " +
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 else:
                     table_data.append([num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'] + "\nFor " +
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 if list_numb > 20:
                     break
             table = AsciiTable(table_data)

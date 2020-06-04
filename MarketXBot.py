@@ -615,12 +615,13 @@ async def market(ctx, coin: str = None):
                 if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                     table_data.append([order_item['pair_name'], num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 else:
                     table_data.append([order_item['pair_name']+"*", num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
-                if list_numb > 20:
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), order_item['order_id']])
+                if list_numb > 15:
                     break
             table = AsciiTable(table_data)
             # table.inner_column_border = False
@@ -672,12 +673,14 @@ async def market(ctx, coin: str = None):
                 if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                     table_data.append([order_item['pair_name'], num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 else:
                     table_data.append([order_item['pair_name']+"*", num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
-                if list_numb > 20:
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
+                if list_numb > 15:
                     break
             table = AsciiTable(table_data)
             # table.inner_column_border = False
@@ -705,12 +708,14 @@ async def market(ctx, coin: str = None):
                         if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                             table_data.append([order_item['pair_name'], num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                               num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                              '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                              '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                              order_item['order_id']])
                         else:
                             table_data.append([order_item['pair_name']+"*", num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                               num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                              '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
-                        if list_numb > 20:
+                                              '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                              order_item['order_id']])
+                        if list_numb > 15:
                             break
                     table = AsciiTable(table_data)
                     table.padding_left = 0
@@ -762,11 +767,13 @@ async def buy(ctx, ref_number: str):
                 if is_tradeable_coin(order_item['coin_get']) and is_tradeable_coin(order_item['coin_sell']):
                     table_data.append([order_item['pair_name'], num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 else:
                     table_data.append([order_item['pair_name']+"*", num_format_coin(order_item['amount_sell_after_fee'], order_item['coin_sell'])+order_item['coin_sell'],
                                       num_format_coin(order_item['amount_get_after_fee'], order_item['coin_get'])+order_item['coin_get'], 
-                                      '{:.8f}'.format(round(order_item['sell_div_get'], 8)), order_item['order_id']])
+                                      '{:.8f}'.format(round(order_item['amount_sell']/order_item['amount_get']/get_decimal(order_item['coin_sell'])*get_decimal(order_item['coin_get']), 8)), 
+                                      order_item['order_id']])
                 if list_numb > 20:
                     break
             table = AsciiTable(table_data)
