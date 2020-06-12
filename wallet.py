@@ -276,6 +276,11 @@ def get_min_sell(coin: str):
 def get_max_sell(coin: str):
     return getattr(config,"coin"+coin,config.coinWRKZ).max_buysell
 
+def get_min_digisell(coin: str):
+    return getattr(config,"coin"+coin,config.coinWRKZ).min_digisell
+
+def get_max_digisell(coin: str):
+    return getattr(config,"coin"+coin,config.coinWRKZ).max_digisell
 
 def get_prefix(coin: str):
     return getattr(config,"coin"+coin,config.coinWRKZ).prefix

@@ -43,11 +43,24 @@ myconfigtipbot = {
     'autocommit':True
     }
 
+myconfig_proxyweb = {
+    'host': config.mysql_proxyweb.host,
+    'user':config.mysql_proxyweb.user,
+    'password':config.mysql_proxyweb.password,
+    'database':config.mysql_proxyweb.db,
+    'charset':'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor,
+    'autocommit':True
+    }
+
 connPool = pymysqlpool.ConnectionPool(size=4, name='connPool', **myconfig)
 conn = connPool.get_connection(timeout=5, retry_num=2)
 
 connPoolTip = pymysqlpool.ConnectionPool(size=2, name='connPoolTip', **myconfigtipbot)
 connTip = connPoolTip.get_connection(timeout=5, retry_num=2)
+
+connPoolProxy = pymysqlpool.ConnectionPool(size=2, name='connPoolProxy', **myconfig_proxyweb)
+connProxy = connPoolProxy.get_connection(timeout=5, retry_num=2)
 
 sys.path.append("..")
 
@@ -78,9 +91,11 @@ def openConnection():
     try:
         if conn is None:
             conn = connPool.get_connection(timeout=5, retry_num=2)
+        conn.ping(reconnect=True)  # reconnecting mysql
     except:
         print("ERROR: Unexpected error: Could not connect to MySql instance.")
         sys.exit()
+
 
 # connPoolTip 
 def openConnectionTip():
@@ -88,8 +103,21 @@ def openConnectionTip():
     try:
         if connTip is None:
             connTip = connPoolTip.get_connection(timeout=5, retry_num=2)
+        connTip.ping(reconnect=True)  # reconnecting mysql
     except:
         print("ERROR: Unexpected error: Could not connect to MySql instance connPoolTip.")
+        sys.exit()
+
+
+# connPoolProxy 
+def openConnectionProxy():
+    global connProxy, connPoolProxy
+    try:
+        if connProxy is None:
+            connProxy = connPoolProxy.get_connection(timeout=5, retry_num=2)
+        connProxy.ping(reconnect=True)  # reconnecting mysql
+    except:
+        print("ERROR: Unexpected error: Could not connect to MySql instance connPoolProxy.")
         sys.exit()
 
 
@@ -1231,3 +1259,326 @@ def sql_add_logs_tx(list_tx):
             return cur.rowcount
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
+
+
+def sql_info_by_server(server_id: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur: 
+            sql = """ SELECT * FROM discord_server WHERE `serverid` = %s LIMIT 1 """
+            cur.execute(sql, (server_id,))
+            result = cur.fetchone()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+
+
+def sql_addinfo_by_server(server_id: str, servername: str, prefix: str, rejoin: bool = True):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            if rejoin:
+                sql = """ INSERT INTO `discord_server` (`serverid`, `servername`, `prefix`)
+                          VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE 
+                          `servername` = %s, `prefix` = %s, `status` = %s """
+                cur.execute(sql, (server_id, servername[:28], prefix, servername[:28], prefix, "REJOINED", ))
+                conn.commit()
+            else:
+                sql = """ INSERT INTO `discord_server` (`serverid`, `servername`, `prefix`)
+                          VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE 
+                          `servername` = %s, `prefix` = %s"""
+                cur.execute(sql, (server_id, servername[:28], prefix, servername[:28], prefix))
+                conn.commit()
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+
+
+def sql_digi_order_add_data(ref_id: str, title: str, desc: str, coin_name: str, item_cost: float, item_cost_after_fee: float, item_coin_decimal: int, 
+    owner_id: str, owner_name: str, status: str='PENDING', sell_user_server: str='DISCORD'):
+    global conn
+    user_server = sell_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    status = status.upper()
+    if status not in ['AVAILABLE','SUSPENDED','PENDING']:
+        return
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ INSERT INTO `digi_order` (`ref_id`, `title`, `desc`, `coin_name`, `item_cost`, 
+                      `item_cost_after_fee`, `item_coin_decimal`, `owner_id`, `owner_name`, 
+                      `added_date`, `status`, `sell_user_server`)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+            cur.execute(sql, (ref_id, title, desc, coin_name, item_cost, item_cost_after_fee,
+                              item_coin_decimal, owner_id, owner_name, int(time.time()),
+                              status, user_server))
+            conn.commit()
+            return True
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return False
+
+
+def sql_merchant_update_by_ref(ref: str, what: str, value: str, sell_user_server: str='DISCORD'):
+    user_server = sell_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    if what not in ["title", "desc", "status", "numb_bought", "amount"]:
+        return
+    if what.lower() == "amount":
+        amount_data = json.loads(value)
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            if what.lower() == "amount":
+                sql = """ UPDATE digi_order SET `coin_name` = %s, `item_cost`=%s, `item_cost_after_fee`=%s, 
+                          `item_coin_decimal`=%s, `updated_date`=%s 
+                          WHERE `ref_id` = %s AND `sell_user_server`=%s """
+                cur.execute(sql, (amount_data['coin_name'], amount_data['item_cost'], 
+                                  amount_data['item_cost_after_fee'], amount_data['item_coin_decimal'], 
+                                  int(time.time()), ref, user_server))
+                conn.commit()
+                return True
+            elif what.lower() == "numb_bought":
+                sql = """ UPDATE digi_order SET `numb_bought` = `numb_bought` + 1 
+                          WHERE `ref_id` = %s AND `sell_user_server`=%s """
+                cur.execute(sql, (value, int(time.time()), ref, user_server))
+                conn.commit()
+                return True
+            else:
+                sql = """ UPDATE digi_order SET `""" + what.lower() + """` = %s, `updated_date`=%s 
+                          WHERE `ref_id` = %s AND `sell_user_server`=%s """
+                cur.execute(sql, (value, int(time.time()), ref, user_server))
+                conn.commit()
+                return True
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_list_of_user(userid: str, status:str, created_user_server: str='DISCORD', limit: int=100):
+    user_server = created_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    status = status.upper()
+    if status not in ['AVAILABLE','SUSPENDED','PENDING', 'ALL']:
+        return
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            if status != 'ALL':
+                if userid == 'ALL':
+                    sql = """ SELECT * FROM digi_order WHERE `status` = %s AND `sell_user_server`=%s 
+                              ORDER BY `added_date` DESC LIMIT """+str(limit)+""" """
+                    cur.execute(sql, (status, user_server))
+                    result = cur.fetchall()
+                    return result
+                else:
+                    sql = """ SELECT * FROM digi_order WHERE `status` = %s AND `sell_user_server`=%s AND `owner_id`=%s 
+                              ORDER BY `added_date` DESC LIMIT """+str(limit)+""" """
+                    cur.execute(sql, (status, user_server, userid))
+                    result = cur.fetchall()
+                    return result
+            else:
+                if userid == 'ALL':
+                    sql = """ SELECT * FROM digi_order WHERE `sell_user_server`=%s 
+                              ORDER BY `added_date` DESC LIMIT """+str(limit)+""" """
+                    cur.execute(sql, (user_server))
+                    result = cur.fetchall()
+                    return result
+                else:
+                    sql = """ SELECT * FROM digi_order WHERE `sell_user_server`=%s AND `owner_id`=%s 
+                              ORDER BY `added_date` DESC LIMIT """+str(limit)+""" """
+                    cur.execute(sql, (user_server, userid))
+                    result = cur.fetchall()
+                    return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_get_ref(ref: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_order WHERE `ref_id` = %s LIMIT 1 """
+            cur.execute(sql, (ref))
+            result = cur.fetchone()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_add_bought(ref_id: str, buy_ref: str, owner_id: str, bought_userid: str, bought_name: str, coin_name: str, 
+    item_cost: float, item_cost_after_fee: float, item_coin_decimal: int, buy_user_server: str='DISCORD'):
+    global conn
+    user_server = buy_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ INSERT INTO `digi_bought` (`ref_id`, `buy_ref`, `owner_id`, `bought_userid`, 
+                      `bought_name`, `coin_name`, `item_cost`, `item_cost_after_fee`, `item_coin_decimal`, 
+                      `bought_date`, `buy_user_server`)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+            cur.execute(sql, (ref_id, buy_ref, owner_id, bought_userid, bought_name, coin_name,
+                              item_cost, item_cost_after_fee, item_coin_decimal, int(time.time()), user_server))
+            conn.commit()
+            return True
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return False
+
+
+def sql_merchant_get_bought_by_ref(userid: str, ref: str, buy_user_server: str='DISCORD'):
+    user_server = buy_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            if userid == 'ALL':
+                sql = """ SELECT * FROM digi_bought WHERE `ref_id` = %s  
+                          ORDER BY `bought_date` DESC """
+                cur.execute(sql, (ref))
+                result = cur.fetchall()
+                return result
+            else:
+                sql = """ SELECT * FROM digi_bought WHERE `ref_id` = %s AND `buy_user_server`=%s AND `bought_userid`=%s LIMIT 1 """
+                cur.execute(sql, (ref, user_server, userid))
+                result = cur.fetchone()
+                return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_get_buy_by_bought_ref(ref: str, bought_ref: str, buy_user_server: str='DISCORD'):
+    user_server = buy_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            if bought_ref == 'ALL':
+                sql = """ SELECT * FROM digi_bought WHERE `ref_id` = %s  
+                          ORDER BY `bought_date` DESC """
+                cur.execute(sql, (ref))
+                result = cur.fetchall()
+                return result
+            else:
+                sql = """ SELECT * FROM digi_bought WHERE `buy_ref` = %s AND `buy_user_server`=%s LIMIT 1 """
+                cur.execute(sql, (bought_ref, user_server))
+                result = cur.fetchone()
+                return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_get_buy_by_bought_userid(userid: str, buy_user_server: str='DISCORD', limit: int=25):
+    user_server = buy_user_server.upper()
+    if user_server not in ['DISCORD', 'TELEGRAM']:
+        return
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_bought WHERE `bought_userid` = %s  
+                      AND `buy_user_server`=%s ORDER BY `bought_date` DESC LIMIT """+str(limit)+""" """
+            cur.execute(sql, (userid, user_server))
+            result = cur.fetchall()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_add_file(ref_id: str, file_id: str, md5_hash: str, owner_id: str, original_filename:str, 
+    stored_name: str, filesize: float, filetype: str):
+    global conn, connProxy
+    time_now = int(time.time())
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ INSERT INTO `digi_files` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
+                      `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
+            cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
+                              filesize, filetype, time_now))
+            conn.commit()
+            try:
+                openConnectionProxy()
+                with connProxy.cursor() as cur:
+                    sql = """ INSERT INTO `digi_files` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
+                              `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
+                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
+                    cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
+                                      filesize, filetype, time_now))
+                    connProxy.commit()
+                    return True
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return False
+
+
+def sql_merchant_get_files_by_ref(ref_id: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_files WHERE `ref_id` = %s  
+                      ORDER BY `stored_date` DESC LIMIT 20 """
+            cur.execute(sql, (ref_id))
+            result = cur.fetchall()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_get_files_by_file_id(file_id: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_files WHERE `file_id` = %s LIMIT 1 """
+            cur.execute(sql, (file_id))
+            result = cur.fetchone()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_unlink_by_file_id(file_id: str):
+    global conn, connProxy
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ DELETE FROM digi_files WHERE `file_id` = %s LIMIT 1 """
+            cur.execute(sql, (file_id))
+            conn.commit()
+            try:
+                openConnectionProxy()
+                with connProxy.cursor() as cur:
+                    sql = """ DELETE FROM digi_files WHERE `file_id` = %s LIMIT 1 """
+                    cur.execute(sql, (file_id))
+                    connProxy.commit()
+                    return True
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None

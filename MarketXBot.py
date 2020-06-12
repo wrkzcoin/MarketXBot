@@ -4,7 +4,7 @@ from discord.ext.commands import Bot, AutoShardedBot, when_mentioned_or, CheckFa
 from discord.utils import get
 
 import time, timeago
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import config
 import click
 import sys, traceback
@@ -13,17 +13,29 @@ import asyncio
 from terminaltables import AsciiTable
 
 import uuid, json
+import aiohttp
 
 import store, addressvalidation, walletapi
 from wallet import *
 
 from generic_xmr.address_msr import address_msr as address_msr
 from generic_xmr.address_xmr import address_xmr as address_xmr
-from generic_xmr.address_upx import address_upx as address_upx
 from generic_xmr.address_xam import address_xam as address_xam
 
 # regex
 import re
+
+# hashlib
+import hashlib
+import base64
+import os.path, os
+
+# for randomString
+import random
+import string
+
+#
+from Crypto.Cipher import AES
 
 # redis
 import redis
@@ -31,12 +43,11 @@ redis_pool = None
 redis_conn = None
 redis_expired = 120
 
-bot_help_info = "Get your wallet ticker's info."
-
 # Coin using wallet-api
 ENABLE_COIN = config.Enable_Coin.split(",")
 ENABLE_XMR = config.Enable_Coin_XMR.split(",")
 ENABLE_SWAP = config.Enabe_Swap_Coin.split(",")
+ENABLE_COIN_DIGI = config.Enable_Coin_Digi.split(",")
 
 MIN_RATIO = float(config.Min_Ratio)
 TRADE_PERCENT = config.Trade_Margin
@@ -58,8 +69,30 @@ EMOJI_QUESTEXCLAIM = "\u2049"
 EMOJI_ARROW_RIGHTHOOK = "\u21AA"
 EMOJI_REFRESH = "\U0001F504"
 
+EMOJI_THUMB_UP = "\U0001F44D"
+EMOJI_THUMB_DOWN = "\U0001F44E"
+
+NOTICE_START_SELL = """
+```
+By creating a ditigal selling using this bot, you will need to accept the following term:\n
+
+1) Maintenance fee """+"{0:.0%}".format(config.Merchant_Setting.Fee_Margin)+""" for each sold product.
+
+1) If you buy, it is not refund-able. However, you can rate / review the seller.
+
+2) This bot will also needs to DM you in case of some notification of buy/sell activities.
+
+3) This term can be updated without notification.
+
+4) This Bot is still under testing.
+
+* Consider donation via donate command if you like it.
+```
+"""
+
 # param introduce by @bobbieltd
 WITHDRAW_IN_PROCESS = []
+QUEUE_ADD_LIST = []
 
 # Some notice about coin that going to swap or take out.
 NOTICE_COIN = {
@@ -72,13 +105,13 @@ NOTICE_COIN = {
     "LOKI" : getattr(getattr(config,"coinLOKI"),"coin_notice", None),
     "XMR" : getattr(getattr(config,"coinXMR"),"coin_notice", None),
     "ARQ" : getattr(getattr(config,"coinARQ"),"coin_notice", None),
-    "UPX" : getattr(getattr(config,"coinUPX"),"coin_notice", None),
     "XEQ" : getattr(getattr(config,"coinARQ"),"coin_notice", None),
     "default": "Thank you for using."
     }
 
 bot_help_admin_lockuser = "Lock a user from any action by user id"
 bot_help_admin_unlockuser = "Unlock a user"
+bot_help_deposit = "Get your wallet ticker's deposit."
 bot_help_balance = "Check your balance."
 bot_help_send = "Send coin to an address from your balance."
 bot_help_coininfo = "List of coin status."
@@ -91,9 +124,46 @@ bot_help_order_num = "Show an order number"
 bot_help_admin_baluser = "Show a user balance"
 bot_help_swap = "Swap balance amount between our bot to our bot"
 
+bot_help_merchant = "Manage your digital selling."
+bot_help_merchant_add = "Add a digital product for selling"
+bot_help_merchant_addfile = "Attach file to a selling product"
+bot_help_merchant_detail = "View an item in detail by a ref number."
+bot_help_merchant_buy = "Buy a digital product using your balance."
+bot_help_merchant_mylist = "List of your active selling items."
+bot_help_merchant_getitem = "Get an item that you already purchased."
+bot_help_merchant_sell = "Turn a pending to available to purchase by other."
+bot_help_merchant_unsell = "Turn a selling item to PENDING."
+bot_help_merchant_unlink = "Remove a file from an item"
+bot_help_merchant_blist = "List items that you purchased."
 
-bot = AutoShardedBot(command_prefix=[','], owner_id = config.discord.ownerID, case_insensitive=True)
-#bot.remove_command("help")
+bot_help_about = "About MarketXBot."
+bot_help_invite = "Invite link of bot to your server."
+bot_help_donate = "Donate to support Crypto MarketXBot."
+
+# Steal from https://github.com/cree-py/RemixBot/blob/master/bot.py#L49
+async def get_prefix(bot, message):
+    """Gets the prefix for the guild"""
+    pre_cmd = config.discord.prefixCmd
+    if isinstance(message.channel, discord.DMChannel):
+        pre_cmd = config.discord.prefixCmd
+        extras = [pre_cmd, ',', 'mxb.', 'mxb!']
+        return when_mentioned_or(*extras)(bot, message)
+
+    serverinfo = store.sql_info_by_server(str(message.guild.id))
+    if serverinfo is None:
+        # Let's add some info if guild return None
+        add_server_info = store.sql_addinfo_by_server(str(message.guild.id), message.guild.name,
+                                                      config.discord.prefixCmd)
+        pre_cmd = config.discord.prefixCmd
+        serverinfo = store.sql_info_by_server(str(message.guild.id))
+    if serverinfo and ('prefix' in serverinfo):
+        pre_cmd = serverinfo['prefix']
+    else:
+        pre_cmd =  config.discord.prefixCmd
+    extras = [pre_cmd, 'mxb.', 'mxb!']
+    return when_mentioned_or(*extras)(bot, message)
+
+bot = AutoShardedBot(command_prefix=get_prefix, owner_id = config.discord.ownerID, case_insensitive=True)
 
 
 def init():
@@ -126,6 +196,7 @@ def get_notice_txt(coin: str):
 async def on_shard_ready(shard_id):
     print(f'Shard {shard_id} connected')
 
+
 @bot.event
 async def on_ready():
     print('Logged in as')
@@ -134,6 +205,58 @@ async def on_ready():
     print('------')
     game = discord.Game(name="Testing Only")
     await bot.change_presence(status=discord.Status.online, activity=game)
+
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    # If bot re-act, ignore.
+    if user.id == bot.user.id:
+        return
+    # If other people beside bot react.
+    else:
+        # If re-action is OK box and message author is bot itself
+        if reaction.emoji == EMOJI_OK_BOX and reaction.message.author.id == bot.user.id:
+            await reaction.message.delete()
+
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.guild_id is None:
+        return  # Reaction is on a private message
+    """Handle a reaction add."""
+    try:
+        emoji_partial = str(payload.emoji)
+        message_id = payload.message_id
+        channel_id = payload.channel_id
+        user_id = payload.user_id
+        guild = bot.get_guild(payload.guild_id)
+        channel = bot.get_channel(id=channel_id)
+        if not channel:
+            return
+        if isinstance(channel, discord.DMChannel):
+            return
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+        return
+    message = None
+    author = None
+    if message_id:
+        try:
+            message = await channel.fetch_message(message_id)
+            author = message.author
+        except (discord.errors.NotFound, discord.errors.Forbidden) as e:
+            # No message found
+            return
+        member = bot.get_user(id=user_id)
+        if emoji_partial in [EMOJI_OK_BOX] and message.author.id == bot.user.id \
+            and author != member and message:
+            # Delete message
+            try:
+                await message.delete()
+                return
+            except discord.errors.NotFound as e:
+                # No message found
+                return
 
 
 @bot.group(hidden = True)
@@ -355,7 +478,7 @@ async def depositable(ctx, coin: str):
     return
 
 
-## todo just use only one command to switch ON/OFF
+# just use only one command to switch ON/OFF
 @commands.is_owner()
 @admin.command(help=bot_help_admin_lockuser)
 async def lockuser(ctx, user_id: str, *, reason: str):
@@ -391,8 +514,617 @@ async def unlockuser(ctx, user_id: str):
         return
 
 
-@bot.command(pass_context=True, name='info', help=bot_help_info)
-async def info(ctx, coin: str, pub: str = None):
+@bot.group(name='merchant', aliases=['m'], help=bot_help_merchant)
+async def merchant(ctx):
+    prefix = await get_guild_prefix(ctx)
+    if ctx.invoked_subcommand is None:
+        await ctx.send(f'{ctx.author.mention} Invalid merchant command.\n'
+                       f'Please use help of each subcommand. Example: {prefix}help merchant OR {prefix}help merchant subcommand')
+    return
+
+
+@merchant.command(help=bot_help_merchant_add)
+async def add(ctx):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    prefix = await get_guild_prefix(ctx)
+    if ctx.message.author.id in QUEUE_ADD_LIST:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} you are still in another progress of adding bounty.\n'
+                       'You can cancel it also by: {prefix}merchant cancel')
+        return
+    random_string = randomString(12) # use this as reference
+    try:
+        msg = await ctx.send(f'{ctx.author.mention} You are about to adding a digital item for selling. Please input or re-act as bot requested.\n'
+                             f'{NOTICE_START_SELL}'
+                             f'Re-act: {EMOJI_THUMB_UP} if you agree.')
+        await msg.add_reaction(EMOJI_THUMB_UP)
+
+        def check(reaction, user):
+            return user == ctx.message.author and reaction.message.author == bot.user and reaction.message.id == msg.id and str(reaction.emoji) == EMOJI_THUMB_UP
+        try:
+            reaction, user = await bot.wait_for('reaction_add', timeout=config.Merchant_Setting.default_timeout, check=check)
+        except asyncio.TimeoutError:
+            await ctx.send(f'{ctx.author.mention} too long. We assumed you are {EMOJI_THUMB_DOWN}')
+            return
+        else:
+            await ctx.send(f'{ctx.author.mention} Thank you for {EMOJI_THUMB_UP}. Your ongoing product input ref_id: **{random_string}**. Let\'s move to next step.')
+            pass
+        # store temporary data and start interactive
+        QUEUE_ADD_LIST.append(ctx.message.author.id)
+        msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                             f'Please type in **amount coin_name** for the price to sell (timeout {config.Merchant_Setting.price_timeout}s):\n'
+                             'Supported coin: {}'.format(", ".join(ENABLE_COIN_DIGI)))
+
+        amount = None
+        COIN_NAME = None
+        while (amount is None) or (COIN_NAME not in ENABLE_COIN_DIGI):
+            waiting_pricemsg = None
+            try:
+                waiting_pricemsg = await bot.wait_for('message', timeout=config.Merchant_Setting.price_timeout, check=lambda msg: msg.author == ctx.author)
+            except asyncio.TimeoutError:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during price input.')
+                return
+            if waiting_pricemsg is None:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during price input.')
+                return
+            else:
+                msg_content = waiting_pricemsg.content.split(" ")
+                if len(msg_content) != 2:
+                    await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                    await ctx.send(f'{ctx.author.mention} Please use **amount coin_name**. Example `1,000,000 WRKZ`')
+                else:
+                    amount = msg_content[0]
+                    COIN_NAME = msg_content[1].upper()
+                    if COIN_NAME not in ENABLE_COIN_DIGI:
+                        accepted_coin = ", ".join(ENABLE_COIN_DIGI)
+                        await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                        await ctx.send(f'{ctx.author.mention} Please use accepted coin: **{accepted_coin}**.')
+                    else:
+                        amount = amount.replace(",", "")
+                        try:
+                            amount = float(amount)
+                            MinTx = get_min_digisell(COIN_NAME)
+                            MaxTX = get_max_digisell(COIN_NAME)
+                            real_amount = amount*get_decimal(COIN_NAME)
+                            if MinTx <= real_amount <= MaxTX:
+                                # OK, we can list it
+                                pass
+                            else:
+                                await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                                await ctx.send(f'{ctx.author.mention} Amount input is not between '
+                                               f'{num_format_coin(MinTx, COIN_NAME)}{COIN_NAME}, {num_format_coin(MaxTX, COIN_NAME)}{COIN_NAME}.')
+                                amount = None
+                        except ValueError:
+                            amount = None
+                            await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Invalid amount.')
+        msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                             f'Selling price is set to: **{num_format_coin(real_amount, COIN_NAME)}{COIN_NAME}**\n'
+                             f'Next, please give a title of this item (min. {config.Merchant_Setting.title_min}, '
+                             f'max. {config.Merchant_Setting.title_max} chars, timeout {config.Merchant_Setting.title_timeout}s):')
+        # TITLE
+        title = None
+        while title is None:
+            waiting_titlemsg = None
+            try:
+                waiting_titlemsg = await bot.wait_for('message', timeout=config.Merchant_Setting.title_timeout, check=lambda msg: msg.author == ctx.author)
+            except asyncio.TimeoutError:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during title input.')
+                return
+            if waiting_titlemsg is None:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during title input.')
+                return
+            else:
+                if config.Merchant_Setting.title_min <= len(waiting_titlemsg.content) <= config.Merchant_Setting.title_max:
+                    title = waiting_titlemsg.content.strip()
+                    msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                         f'Item title set: **{title}**\n'
+                                         f'Next, please give a description of this item (min. {config.Merchant_Setting.desc_min}, '
+                                         f'max. {config.Merchant_Setting.desc_max} chars, timeout {config.Merchant_Setting.desc_timeout}s):')
+                else:
+                    title = None
+                    await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                    await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                   f'{ctx.author.mention} title too long or too short.')
+        # DESC
+        desc = None
+        while desc is None:
+            waiting_descmsg = None
+            try:
+                waiting_descmsg = await bot.wait_for('message', timeout=config.Merchant_Setting.desc_timeout, check=lambda msg: msg.author == ctx.author)
+            except asyncio.TimeoutError:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during description input.')
+                return
+            if waiting_descmsg is None:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during description input.')
+                return
+            else:
+                if config.Merchant_Setting.desc_min <= len(waiting_descmsg.content) <= config.Merchant_Setting.desc_max:
+                    desc = waiting_descmsg.content.strip()
+                    msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                         f'Description set: **{desc}**\n')
+                else:
+                    await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                    await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                   f'{ctx.author.mention} description too long or too short.')
+        try:
+            embed = discord.Embed(title="ITEM: {}".format(title), description="Here's your item briefing.", color=0x00ff00)
+            embed.add_field(name="Amount", value=f'{num_format_coin(real_amount, COIN_NAME)}{COIN_NAME}', inline=True)
+            embed.add_field(name="Seller", value=ctx.author.mention, inline=False)
+            embed.add_field(name="Description", value=desc, inline=False)
+            embed.add_field(name="Re-act", value=f'{EMOJI_THUMB_UP} to confirm, {EMOJI_THUMB_DOWN} to cancel', inline=False)
+            embed.set_thumbnail(url=ctx.message.author.avatar_url)
+            msg = await ctx.send(embed=embed)
+            await msg.add_reaction(EMOJI_THUMB_DOWN)
+            await msg.add_reaction(EMOJI_THUMB_UP)
+            def check(reaction, user):
+                return user == ctx.message.author and reaction.message.id == msg.id  \
+                and str(reaction.emoji) in (EMOJI_THUMB_DOWN, EMOJI_THUMB_UP)
+            reaction, user = await bot.wait_for('reaction_add', check=check)
+            if str(reaction.emoji) == EMOJI_THUMB_UP:
+                add = store.sql_digi_order_add_data(random_string, title, desc, COIN_NAME, real_amount, real_amount*(1-config.Merchant_Setting.Fee_Margin),
+                                                    get_decimal(COIN_NAME), str(ctx.message.author.id), 
+                                                    '{}#{}'.format(ctx.message.author.name, ctx.message.author.discriminator), 'PENDING', 'DISCORD')
+                if add: 
+                    msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                         f'Status: **Submitted and pending**\n'
+                                         f'Please attach file and input comment **{prefix}m addfile {random_string}**\n'
+                                         f'You can add file one by one (supported only {config.Merchant_Setting.allow_ext} format).')
+                    delete_queue_going(ctx.message.author.id)
+                    await msg.add_reaction(EMOJI_OK_BOX)
+                else:
+                    msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                         f'Status: **Not submitted** (Internal Error)')
+                    await msg.add_reaction(EMOJI_OK_BOX)
+            elif str(reaction.emoji) == EMOJI_THUMB_DOWN:
+                delete_queue_going(ctx.message.author.id)
+                msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                     f'Status: **Cancelled**')
+        except:
+            error = discord.Embed(title=":exclamation: Error", description=" :warning: Failed to display!", color=0xe51e1e)
+            await ctx.send(embed=error)
+    except (discord.Forbidden, discord.errors.Forbidden) as e:
+        # no permission to text or to re-act
+        await ctx.message.add_reaction(EMOJI_ERROR)
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+
+
+@merchant.command(help=bot_help_merchant_addfile)
+async def addfile(ctx, ref_id: str):
+    global redis_pool, redis_conn
+    ref = ref_id.lower()
+    prefix = await get_guild_prefix(ctx)
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        if int(get_item_ref['owner_id']) != ctx.message.author.id:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You can not add files to item **{ref}**.')
+            return
+        if get_item_ref['status'] == 'SUSPENDED':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is **SUSPENDED**.')
+            return
+        # Check number of file if exceed
+        get_files_ref = store.sql_merchant_get_files_by_ref(ref)
+        if get_files_ref and len(get_files_ref) >= config.Merchant_Setting.max_file_per_item:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is already having {len(get_files_ref)} files.'
+                           ' Can not add more.')
+            return
+        if not ctx.message.attachments:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} There is no attachment in your message for **{ref}**.')
+            return
+        else:
+            attachment = ctx.message.attachments[0]
+            allowed_ext = config.Merchant_Setting.allow_ext
+            if not (attachment.filename.lower()).endswith(tuple(allowed_ext.split(","))):
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Attachment type rejected. Allowed: {allowed_ext}')
+                return
+            if attachment.size >= config.Merchant_Setting.max_size:
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} File too big.')
+                return
+            # check filename:
+            link = attachment.url # https://cdn.discordapp.com/attachments
+            if not re.match(r'^[a-zA-Z0-9\d.\-_]*$', attachment.filename.replace(" ", "-")):
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Unacceptable file name.')
+                return
+            else:
+                attach_save_name = str(uuid.uuid4()) + '-' + attachment.filename.lower().replace(" ", "-")
+            try:
+                if link.startswith("https://cdn.discordapp.com/attachments"):
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(link) as resp:
+                            if resp.status == 200:
+                                if resp.headers["Content-Type"] not in ["application/zip", "application/gzip", "application/x-bzip2", "application/x-xz", "application/x-7z-compressed"]:
+                                    await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Unsupported format file.')
+                                    return
+                                else: 
+                                    with open(config.Merchant_Setting.path + attach_save_name, 'wb') as f:
+                                        f.write(await resp.read())
+                                    file_ref = "file_" + randomString(12)
+                                    md5_hash = get_md5_file(config.Merchant_Setting.path + attach_save_name)
+                                    uploadfile = store.sql_merchant_add_file(ref, file_ref, md5_hash, str(ctx.message.author.id), attachment.filename, 
+                                                                             attach_save_name, attachment.size, resp.headers["Content-Type"])
+                                    if uploadfile:
+                                        await ctx.message.add_reaction(EMOJI_OK_HAND)
+                                        await ctx.send(f'{ctx.author.mention} Successfully uploaded file **{attachment.filename}** for selling item: **{ref}**.')
+                                        return
+                                    else:
+                                        await ctx.message.add_reaction(EMOJI_ERROR)
+                                        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Failed to upload and store.')
+                                        return
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+            return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Can not find selling item **{ref}**.')
+        return
+
+
+@merchant.command(help=bot_help_merchant_sell)
+async def sell(ctx, ref_id: str):
+    global redis_pool, redis_conn
+    ref = ref_id.lower()
+    prefix = await get_guild_prefix(ctx)
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        if int(get_item_ref['owner_id']) != ctx.message.author.id:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You can not turn on this item **{ref}**.')
+            return
+        if get_item_ref['status'] == 'SUSPENDED':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is **SUSPENDED**.')
+            return
+        elif get_item_ref['status'] == 'PENDING':
+            # Check if there is file with it or not
+            get_files_ref = store.sql_merchant_get_files_by_ref(ref)
+            if get_files_ref is None or (get_files_ref and len(get_files_ref) == 0):
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} There is no files for item **{ref}**\n.'
+                               f'Please upload one or more before doing this by: {prefix}m addfile {ref}')
+                return
+            else:
+                # OK turn it to available
+                updated = store.sql_merchant_update_by_ref(ref, 'status', 'AVAILABLE', 'DISCORD')
+                if updated:
+                    await ctx.message.add_reaction(EMOJI_OK_HAND)
+                    await ctx.send(f'{ctx.author.mention} Successfully updated status item **{ref}** to **AVAILABLE**')
+                    return
+                else:
+                    await ctx.message.add_reaction(EMOJI_ERROR)
+                    await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Failed to update status item **{ref}**')
+                    return
+        elif get_item_ref['status'] == 'AVAILABLE':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is already **AVAILABLE** Nothing to do.')
+            return
+    return
+
+
+@merchant.command(help=bot_help_merchant_unsell)
+async def unsell(ctx, ref_id: str):
+    global redis_pool, redis_conn
+    ref = ref_id.lower()
+    prefix = await get_guild_prefix(ctx)
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        if int(get_item_ref['owner_id']) != ctx.message.author.id:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You can not have permission for this item **{ref}**.')
+            return
+        if get_item_ref['status'] == 'SUSPENDED':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is **SUSPENDED**.')
+            return
+        elif get_item_ref['status'] == 'AVAILABLE':
+            # OK turn it to back to pending
+            updated = store.sql_merchant_update_by_ref(ref, 'status', 'PENDING', 'DISCORD')
+            if updated:
+                await ctx.message.add_reaction(EMOJI_OK_HAND)
+                await ctx.send(f'{ctx.author.mention} Successfully updated status item **{ref}** to **PENDING**')
+                return
+            else:
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Failed to update status item **{ref}**')
+                return
+        elif get_item_ref['status'] == 'PENDING':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is already **PENDING** Nothing to do.')
+            return
+    return
+
+
+@merchant.command(help=bot_help_merchant_mylist)
+async def mylist(ctx, status: str='ALL'):
+    list_selling_items = None
+    status = status.upper()
+    if status.upper() not in ['AVAILABLE','SUSPENDED','PENDING', 'ALL']:
+        status_list = ", ".join(['AVAILABLE','SUSPENDED','PENDING'])
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Please give filter of correct status ({status_list}).')
+        return
+    else:
+        list_selling_items = store.sql_merchant_list_of_user(str(ctx.message.author.id), status, 'DISCORD', 20)
+    if list_selling_items and len(list_selling_items) > 0:
+        table_data = [
+            ['REF', 'Amount', 'Status', 'Sold', 'Title']
+        ]
+        for each in list_selling_items:
+            table_data.append([each['ref_id'], num_format_coin(each['item_cost'], each['coin_name'])+each['coin_name'], 
+                               each['status'], each['numb_bought'], each['title'][:32]])
+        table = AsciiTable(table_data)
+        # table.inner_column_border = False
+        # table.outer_border = False
+        table.padding_left = 1
+        table.padding_right = 1
+        msg = await ctx.send('**[ YOUR SELLING LIST ]**\n'
+                             f'```{table.table}```')
+        return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} you do not have selling product.')
+        return
+
+
+@merchant.command(help=bot_help_merchant_blist)
+async def blist(ctx):
+    list_selling_items = store.sql_merchant_get_buy_by_bought_userid(str(ctx.message.author.id), 'DISCORD', 25)
+    if list_selling_items and len(list_selling_items) > 0:
+        table_data = [
+            ['Ref', 'Amount', 'Bought Date']
+        ]
+        for each in list_selling_items:
+            table_data.append([each['buy_ref'], num_format_coin(each['item_cost'], each['coin_name'])+each['coin_name'], 
+                              datetime.fromtimestamp(each['bought_date'])])
+        table = AsciiTable(table_data)
+        # table.inner_column_border = False
+        # table.outer_border = False
+        table.padding_left = 1
+        table.padding_right = 1
+        msg = await ctx.send('**[ YOUR BOUGHT ITEM ]**\n'
+                             f'```{table.table}```')
+        return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} you did not buy any product.')
+        return
+
+@merchant.command(help=bot_help_merchant_buy)
+async def buy(ctx, ref: str):
+    global redis_pool, redis_conn
+    ref = ref.lower()
+    prefix = await get_guild_prefix(ctx)
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        if int(get_item_ref['owner_id']) == ctx.message.author.id:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You can not buy for your own item **{ref}**.')
+            return
+        if get_item_ref['status'] != 'AVAILABLE':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is not **AVAILABLE**.')
+            return
+        else:
+            # OK, item is available to buy
+            check_bought = store.sql_merchant_get_bought_by_ref(str(ctx.message.author.id), ref, 'DISCORD')
+            if check_bought:
+                item_ref = check_bought['buy_ref']
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You already bought this item: **{ref}**.\n'
+                                     f'Type: {prefix}m get {item_ref}')
+                await msg.add_reaction(EMOJI_OK_BOX)
+                return
+            COIN_NAME = get_item_ref['coin_name']
+            # Check available balance
+            user_from = await store.sql_get_userwallet(str(ctx.message.author.id), COIN_NAME, 'DISCORD')
+            if user_from is None:
+                userregister = await store.sql_register_user(str(ctx.message.author.id), COIN_NAME, 'DISCORD')
+                user_from = await store.sql_get_userwallet(str(ctx.message.author.id), COIN_NAME, 'DISCORD')
+
+            userdata_balance = store.sql_user_balance(str(ctx.message.author.id), COIN_NAME, 'DISCORD')
+            user_from['actual_balance'] = user_from['actual_balance'] + float(userdata_balance['Adjust'])
+
+            needed = num_format_coin(get_item_ref['item_cost'], COIN_NAME)
+            having = num_format_coin(user_from['actual_balance'], COIN_NAME)
+                
+            if get_item_ref['item_cost'] > user_from['actual_balance']:
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Insufficient balance to buy **{ref}**\n'
+                               f'Need: {needed}{COIN_NAME}\n'
+                               f'You have {having}{COIN_NAME}')
+                return
+            else:
+                buy_ref = "b_" + randomString(10)
+                # He has sufficient balance to buy
+                bought = store.sql_merchant_add_bought(ref, buy_ref, get_item_ref['owner_id'], str(ctx.message.author.id), 
+                                                       '{}#{}'.format(ctx.message.author.name, ctx.message.author.discriminator), 
+                                                       COIN_NAME, get_item_ref['item_cost'], get_item_ref['item_cost_after_fee'],
+                                                       get_decimal(COIN_NAME), 'DISCORD')
+                if bought:
+                    await ctx.message.add_reaction(EMOJI_OK_HAND)
+                    msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You have bought item **{ref}**\n'
+                                         f'For a cost of: {needed}{COIN_NAME}\n'
+                                         f'To get the item, type: **{prefix}m get {buy_ref}**. Bot shall DM you.')
+                    await msg.add_reaction(EMOJI_OK_BOX)
+                    # TODO: alert seller
+                    return
+                else:
+                    await ctx.message.add_reaction(EMOJI_ERROR)
+                    msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Failed to buy item: **{ref}**.')
+                    await msg.add_reaction(EMOJI_OK_BOX)
+                return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Can not find selling item **{ref}**.')
+        return
+    return
+
+
+@merchant.command(help=bot_help_merchant_getitem)
+async def get(ctx, buy_ref: str):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    prefix = await get_guild_prefix(ctx)
+    buy_ref = buy_ref.lower()
+    check_bought = store.sql_merchant_get_buy_by_bought_ref('*', buy_ref, 'DISCORD')
+    if check_bought and (int(check_bought['bought_userid']) == ctx.message.author.id or int(check_bought['owner_id']) == ctx.message.author.id):
+        # He bought it or he is the Owner
+        await ctx.message.add_reaction(EMOJI_OK_HAND)
+        try:
+            get_files_ref = store.sql_merchant_get_files_by_ref(check_bought['ref_id'])
+            ref = check_bought['ref_id']
+            if get_files_ref and len(get_files_ref) < 1:
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} There is no file for ref bought **{buy_ref}** for item **{ref}**.')
+                return
+            elif get_files_ref and len(get_files_ref) >= 1:
+                embed = discord.Embed(title="ITEM bought ref: {}".format(buy_ref), description="Files", color=0x00ff00)
+                i=1
+                for each in get_files_ref:
+                    url = encrypted_string('{},{},{}'.format(each['ref_id'], each['file_id'], str(int(time.time())+300)))
+                    embed.add_field(name='File {}/{}'.format(i, len(get_files_ref)), value='{}'.format(config.Merchant_Setting.static_link + '/download-' + url), inline=False)
+                    i+=1
+                embed.set_thumbnail(url=ctx.message.author.avatar_url)
+                try:
+                    msg = await ctx.send(embed=embed)
+                    await msg.add_reaction(EMOJI_OK_BOX)
+                    if isinstance(ctx.channel, discord.DMChannel) == False:
+                        # If public, delete msg after a few seconds
+                        await asyncio.sleep(10)
+                        await msg.delete()
+                except (discord.errors.NotFound, discord.errors.Forbidden) as e:
+                    msg = await ctx.send(f'{ctx.author.mention} I failed to DM you.\n')
+                    await msg.add_reaction(EMOJI_OK_BOX)
+                    return
+        except (discord.errors.NotFound, discord.errors.Forbidden) as e:
+            msg = await ctx.send(f'{ctx.author.mention} I failed to DM you.\n')
+            await msg.add_reaction(EMOJI_OK_BOX)
+        return
+    else:
+        # Check if input is selling ref
+        get_item_ref = store.sql_merchant_get_ref(buy_ref)
+        get_files_ref = store.sql_merchant_get_files_by_ref(buy_ref)
+        if get_item_ref and int(get_item_ref['owner_id']) == ctx.message.author.id and get_files_ref and len(get_files_ref) >= 1:
+            await ctx.message.add_reaction(EMOJI_OK_BOX)
+            embed = discord.Embed(title="ITEM Ref: {}".format(buy_ref), description="Files", color=0x00ff00)
+            embed.add_field(name="Note", value='Found via selling ref_id', inline=False)
+            i=1
+            for each in get_files_ref:
+                url = encrypted_string('{},{},{}'.format(each['ref_id'], each['file_id'], str(int(time.time())+300)))
+                embed.add_field(name='File {}/{}'.format(i, len(get_files_ref)), value='{}'.format(config.Merchant_Setting.static_link + '/download-' + url), inline=False)
+                i+=1
+            embed.set_thumbnail(url=ctx.message.author.avatar_url)
+            msg = await ctx.send(embed=embed)
+            await msg.add_reaction(EMOJI_OK_BOX)
+            if isinstance(ctx.channel, discord.DMChannel) == False:
+                # If public, delete msg after a few seconds
+                await asyncio.sleep(10)
+                await msg.delete()
+            return
+        else:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You do not have any bought item with reference: **{buy_ref}**.\n')
+            await msg.add_reaction(EMOJI_OK_BOX)
+            return
+
+
+@merchant.command(help=bot_help_merchant_unlink)
+async def unlink(ctx, ref_file: str):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    prefix = await get_guild_prefix(ctx)
+    ref_file = ref_file.lower()
+    check_file = store.sql_merchant_get_files_by_file_id(ref_file)
+    if check_file and int(check_file['owner_id']) == ctx.message.author.id:
+        # check if there is only one file left
+        ref = check_file['ref_id']
+        get_files_ref = store.sql_merchant_get_files_by_ref(ref)
+        if get_files_ref and len(get_files_ref) <= 1:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} There is only one file left for selling item: **{ref}**. '
+                                'You need to have at least one remaining.')
+            return
+        else:
+            # check if file exist
+            if os.path.exists(config.Merchant_Setting.path + check_file['stored_name']):
+                await ctx.message.add_reaction(EMOJI_OK_HAND)
+                store.sql_merchant_unlink_by_file_id(ref_file)
+                os.unlink(config.Merchant_Setting.path + check_file['stored_name'])
+                msg = await ctx.send(f'{ctx.author.mention} Sucessfully remove **{ref_file}** from selling item: **{ref}**.')
+                return
+            else:
+                await ctx.message.add_reaction(EMOJI_ERROR)
+                msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Internal error to remove file_id **{ref_file}**.')
+                return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You do not permission to file: **{ref_file}** or it does not exist.\n')
+        await msg.add_reaction(EMOJI_OK_BOX)
+        return
+
+
+@merchant.command(help=bot_help_merchant_detail)
+async def detail(ctx, ref: str):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    prefix = await get_guild_prefix(ctx)
+    ref = ref.lower()
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        try:
+            get_files_ref = store.sql_merchant_get_files_by_ref(ref)
+            embed = discord.Embed(title="Title: {}".format(get_item_ref['title']), description="Ref: {}".format(ref), color=0x00ff00)
+            embed.add_field(name="Amount", value='{}{}'.format(num_format_coin(get_item_ref['item_cost'], get_item_ref['coin_name']), get_item_ref['coin_name']), inline=True)
+            embed.add_field(name="Creator", value='<@{}> (id: {})'.format(get_item_ref['owner_id'], get_item_ref['owner_id']), inline=False)
+            embed.add_field(name="Description", value=get_item_ref['desc'], inline=False)
+            if isinstance(get_item_ref['numb_bought'], int):
+                embed.add_field(name="Sold", value='{}'.format(get_item_ref['numb_bought']), inline=False)
+            if get_files_ref and len(get_files_ref) > 0:
+                embed.add_field(name="Files", value='{}'.format(len(get_files_ref)), inline=False)
+            embed.add_field(name="Status", value=get_item_ref['status'], inline=False)
+            if get_item_ref['status'] == 'AVAILABLE' and int(get_item_ref['owner_id']) != ctx.message.author.id:
+                embed.add_field(name="Buy via", value='{}m buy {}'.format(prefix, ref), inline=False)
+            elif int(get_item_ref['owner_id']) != ctx.message.author.id:
+                embed.add_field(name="Buy?", value='Not available yet', inline=False)
+            if int(get_item_ref['owner_id']) == ctx.message.author.id and isinstance(ctx.channel, discord.DMChannel) == True and len(get_files_ref) > 0:
+                # if he is the owner and message via DM
+                for each in get_files_ref:
+                    embed.add_field(name="File_ID / File Name", value='{} / {}'.format(each['file_id'], each['original_filename']), inline=False)
+            embed.set_thumbnail(url=bot.user.avatar_url)
+            msg = await ctx.send(embed=embed)
+            await msg.add_reaction(EMOJI_OK_BOX)
+        except:
+            error = discord.Embed(title=":exclamation: Error", description=" :warning: Failed to display!", color=0xe51e1e)
+            await ctx.send(embed=error)
+            return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Can not find **{ref}** bounty.')
+        return
+    return
+
+
+@bot.command(pass_context=True, name='deposit', help=bot_help_deposit)
+async def deposit(ctx, coin: str, pub: str = None):
     global ENABLE_COIN
     if not is_testing(ctx):
         return # to delete after test
@@ -1723,6 +2455,51 @@ async def swap(ctx, amount: str, coin: str, to: str):
         return
 
 
+@bot.command(pass_context=True, name='donate', help=bot_help_donate)
+async def donate(ctx):
+    invite_link = "https://discordapp.com/oauth2/authorize?client_id="+str(bot.user.id)+"&scope=bot"
+    donatelist = discord.Embed(title='Support Me', description='', colour=7047495)
+    donatelist.add_field(name='BTC:', value=config.donate.btc, inline=False)
+    donatelist.add_field(name='LTC:', value=config.donate.ltc, inline=False)
+    donatelist.add_field(name='DOGE:', value=config.donate.doge, inline=False)
+    donatelist.add_field(name='BCH:', value=config.donate.bch, inline=False)
+    donatelist.add_field(name='DASH:', value=config.donate.dash, inline=False)
+    donatelist.add_field(name='XMR:', value=config.donate.xmr, inline=False)
+    donatelist.add_field(name='WRKZ:', value=config.donate.wrkz, inline=False)
+    donatelist.set_author(name=bot.user.name, icon_url=bot.user.avatar_url)
+    try:
+        await ctx.send(embed=donatelist)
+        return
+    except Exception as e:
+        await ctx.message.author.send(embed=donatelist)
+        traceback.print_exc(file=sys.stdout)
+
+
+@bot.command(pass_context=True, name='invite', aliases=['inviteme'], help=bot_help_invite)
+async def invite(ctx):
+    invite_link = "https://discordapp.com/oauth2/authorize?client_id="+str(bot.user.id)+"&scope=bot"
+    await ctx.send('**[INVITE LINK]**\n\n'
+                f'{invite_link}')
+
+
+@bot.command(pass_context=True, name='about', help=bot_help_about)
+async def about(ctx):
+    invite_link = "https://discordapp.com/oauth2/authorize?client_id="+str(bot.user.id)+"&scope=bot"
+    botdetails = discord.Embed(title='About Me', description='', colour=7047495)
+    botdetails.add_field(name='My Github:', value='https://github.com/wrkzcoin/MarketXBot', inline=False)
+    botdetails.add_field(name='Invite Me:', value=f'{invite_link}', inline=False)
+    botdetails.add_field(name='Servers I am in:', value=len(bot.guilds), inline=False)
+    botdetails.add_field(name='Supported by:', value='WrkzCoin Community Team', inline=False)
+    botdetails.add_field(name='Supported Server:', value='https://chat.wrkz.work', inline=False)
+    botdetails.set_footer(text='Made in Python3.6+ with discord.py library!', icon_url='http://findicons.com/files/icons/2804/plex/512/python.png')
+    botdetails.set_author(name=bot.user.name, icon_url=bot.user.avatar_url)
+    try:
+        await ctx.send(embed=botdetails)
+    except Exception as e:
+        await ctx.message.author.send(embed=botdetails)
+        traceback.print_exc(file=sys.stdout)
+
+
 def is_depositable_coin(coin: str):
     global redis_conn, redis_expired
     COIN_NAME = coin.upper()
@@ -1925,7 +2702,7 @@ async def update_balance():
     INTERVAL_EACH = 10
     while True:
         print('sleep in second: '+str(INTERVAL_EACH))
-        for coinItem in ["BCH", "DASH", "BTC", "DEGO", "DOGE", "LTC", "XTOR", "TRTL", "WRKZ", "BTCMZ", "LOKI", "XMR", "ARQ", "PLE", "UPX"]:
+        for coinItem in ["BCH", "DASH", "BTC", "DEGO", "DOGE", "LTC", "XTOR", "TRTL", "WRKZ", "BTCMZ", "LOKI", "XMR", "ARQ", "PLE"]:
             await asyncio.sleep(INTERVAL_EACH)
             print('Update balance: '+ coinItem)
             start = time.time()
@@ -2035,14 +2812,6 @@ def get_cn_coin_from_address(CoinAddress: str):
         except Exception as e:
             # traceback.print_exc(file=sys.stdout)
             pass
-        # Try UPX
-        try:
-            addr = address_upx(CoinAddress)
-            COIN_NAME = "UPX"
-            return COIN_NAME
-        except Exception as e:
-            # traceback.print_exc(file=sys.stdout)
-            pass
         # Try XAM
         try:
             addr = address_xam(CoinAddress)
@@ -2070,8 +2839,6 @@ def get_cn_coin_from_address(CoinAddress: str):
         COIN_NAME = "BLOG"
     elif (CoinAddress.startswith("ar") or CoinAddress.startswith("aR")) and (len(CoinAddress) == 97 or len(CoinAddress) == 98 or len(CoinAddress) == 109):
         COIN_NAME = "ARQ"
-    elif ((CoinAddress.startswith("UPX") and len(CoinAddress) == 98) or (CoinAddress.startswith("UPi") and len(CoinAddress) == 109) or (CoinAddress.startswith("Um") and len(CoinAddress) == 97)):
-        COIN_NAME = "UPX"
     elif (CoinAddress.startswith("5") or CoinAddress.startswith("9")) and (len(CoinAddress) == 95 or len(CoinAddress) == 106):
         COIN_NAME = "MSR"
     elif CoinAddress.startswith("D") and len(CoinAddress) == 34:
@@ -2091,11 +2858,12 @@ def get_cn_coin_from_address(CoinAddress: str):
 
 @buy.error
 async def buy_error(ctx, error):
+    prefix = await get_guild_prefix(ctx)
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Missing arguments. '
                        '```'
-                       ',buy ref_number (to buy from opened order)\n'
-                       ',buy ticker (to list available selling tickers)'
+                       f'{prefix}buy ref_number (to buy from opened order)\n'
+                       f'{prefix}buy ticker (to list available selling tickers)'
                        '```')
     return
 
@@ -2131,6 +2899,65 @@ async def add_tx_action_redis(action: str, delete_temp: bool = False):
                 redis_conn.lpush(key, action)
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
+
+
+def delete_queue_going(userid: int):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    # Delete redis and remove user from QUEUE
+    if userid in QUEUE_ADD_LIST:
+        QUEUE_ADD_LIST.remove(userid)
+    keys = redis_conn.keys("MarketBOT:MID_" + str(userid))
+    if len(keys) > 1:
+        for key in keys:
+            redis_conn.delete(key)
+
+
+async def get_guild_prefix(ctx):
+    if isinstance(ctx.channel, discord.DMChannel) == True: return ","
+    serverinfo = store.sql_info_by_server(str(ctx.guild.id))
+    if serverinfo is None:
+        return "."
+    else:
+        return serverinfo['prefix']
+
+
+def randomString(stringLength=8):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for i in range(stringLength))
+
+
+def get_md5_file(filepath: str):
+    with open(filepath, "rb") as f:
+        file_hash = hashlib.md5()
+        while chunk := f.read(8192):
+            file_hash.update(chunk)
+    return file_hash.hexdigest()
+
+
+def encrypted_string(plaintext: str):
+    # Thanks to: https://stackoverflow.com/questions/13051293/encrypt-data-with-python-decrypt-in-php
+    # the block size for the cipher object; must be 16, 24, or 32 for AES
+    BLOCK_SIZE = 32
+    BLOCK_SZ = 14
+
+    # the character used for padding--with a block cipher such as AES, the value
+    # you encrypt must be a multiple of BLOCK_SIZE in length.  This character is
+    # used to ensure that your value is always a multiple of BLOCK_SIZE
+    PADDING = '{'
+
+    # one-liner to sufficiently pad the text to be encrypted
+    pad = lambda s: s + (BLOCK_SIZE - len(s) % BLOCK_SIZE) * PADDING
+
+    # one-liners to encrypt/encode and decrypt/decode a string
+    # encrypt with AES, encode with base64
+    EncodeAES = lambda c, s: base64.b64encode(c.encrypt(pad(s)))
+    DecodeAES = lambda c, e: c.decrypt(base64.b64decode(e)).rstrip(PADDING)
+    secret = config.Merchant_Setting.secure_secret
+    iv = config.Merchant_Setting.iv
+    cipher=AES.new(key=secret,mode=AES.MODE_CBC,IV=iv)
+    encoded = EncodeAES(cipher, plaintext)
+    print('Encrypted string:', encoded)
+    return encoded.hex()
 
 
 @click.command()
