@@ -597,6 +597,25 @@ def sql_user_balance(userID: str, coin: str, user_server: str = 'DISCORD'):
             else:
                 FeeExpense = 0
 
+            # Bought
+            DigiBought = 0
+            DigitSold = 0
+            sql = """ SELECT SUM(item_cost) AS DigiBought FROM digi_bought WHERE `bought_userid`=%s AND `coin_name` = %s AND `buy_user_server`=%s """
+            cur.execute(sql, (userID, COIN_NAME, user_server))
+            result = cur.fetchone()
+            if result:
+                DigiBought = result['DigiBought']
+            else:
+                DigiBought = 0
+            # Sold
+            sql = """ SELECT SUM(item_cost_after_fee) AS DigitSold FROM digi_bought WHERE `owner_id`=%s AND `coin_name` = %s """
+            cur.execute(sql, (userID, COIN_NAME))
+            result = cur.fetchone()
+            if result:
+                DigitSold = result['DigitSold']
+            else:
+                DigitSold = 0
+
         SwapIn = 0
         SwapOut = 0
         if user_server == "DISCORD": 
@@ -630,9 +649,12 @@ def sql_user_balance(userID: str, coin: str, user_server: str = 'DISCORD'):
         balance['FeeExpense'] = float(FeeExpense) if FeeExpense else 0
         balance['SwapIn'] = float(SwapIn) if SwapIn else 0
         balance['SwapOut'] = float(SwapOut) if SwapOut else 0
+        balance['DigitSold'] = float(DigitSold) if DigitSold else 0
+        balance['DigiBought'] = float(DigiBought) if DigiBought else 0
         balance['Adjust'] = balance['Credited'] + balance['CompleteOrderAdd']  + balance['CompleteOrderAdd2'] + balance['SwapIn'] \
                              - balance['CompleteOrderMinus'] - balance['CompleteOrderMinus2'] - balance['OpenOrder'] \
-                             - balance['SendingOut'] - balance['FeeExpense'] - balance['SwapOut']
+                             - balance['SendingOut'] - balance['FeeExpense'] - balance['SwapOut'] \
+                             + balance['DigitSold'] - balance['DigiBought']
         #print(COIN_NAME)
         #print(balance)
         return balance
@@ -1430,6 +1452,10 @@ def sql_merchant_add_bought(ref_id: str, buy_ref: str, owner_id: str, bought_use
                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
             cur.execute(sql, (ref_id, buy_ref, owner_id, bought_userid, bought_name, coin_name,
                               item_cost, item_cost_after_fee, item_coin_decimal, int(time.time()), user_server))
+            conn.commit()
+            # Update buy count
+            sql = """ UPDATE digi_order SET `numb_bought`=`numb_bought`+1 WHERE `ref_id`=%s LIMIT 1 """
+            cur.execute(sql, (ref_id))
             conn.commit()
             return True
     except Exception as e:

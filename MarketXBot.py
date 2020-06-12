@@ -78,13 +78,15 @@ By creating a ditigal selling using this bot, you will need to accept the follow
 
 1) Maintenance fee """+"{0:.0%}".format(config.Merchant_Setting.Fee_Margin)+""" for each sold product.
 
-1) If you buy, it is not refund-able. However, you can rate / review the seller.
+2) If you buy, it is not refund-able. However, you can rate / review the seller.
 
-2) This bot will also needs to DM you in case of some notification of buy/sell activities.
+3) This bot will also needs to DM you in case of some notification of buy/sell activities.
 
-3) This term can be updated without notification.
+4) We do not take any responsible for the file selling by people. You should use antivirus or scan them before using.
 
-4) This Bot is still under testing.
+5) This term can be updated without notification.
+
+6) This Bot is still under testing.
 
 * Consider donation via donate command if you like it.
 ```
@@ -927,6 +929,22 @@ async def buy(ctx, ref: str):
             await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is not **AVAILABLE**.')
             return
         else:
+            msg_term = await ctx.send(f'{ctx.author.mention} You are about to buying an item. Please confirm you read this before continue.\n'
+                                 f'{NOTICE_START_SELL}'
+                                 f'Re-act: {EMOJI_THUMB_UP} if you agree.')
+            await msg_term.add_reaction(EMOJI_THUMB_UP)
+            def check(reaction, user):
+                return user == ctx.message.author and reaction.message.author == bot.user and reaction.message.id == msg_term.id and str(reaction.emoji) == EMOJI_THUMB_UP
+            try:
+                reaction, user = await bot.wait_for('reaction_add', timeout=config.Merchant_Setting.default_timeout, check=check)
+            except asyncio.TimeoutError:
+                await ctx.send(f'{ctx.author.mention} too long. We assumed you do not buy. Message deleted.')
+                await msg_term.delete()
+                return
+            else:
+                await ctx.send(f'{ctx.author.mention} Thank you for your acknowledgement {EMOJI_THUMB_UP}.')
+                await msg_term.delete()
+                pass
             # OK, item is available to buy
             check_bought = store.sql_merchant_get_bought_by_ref(str(ctx.message.author.id), ref, 'DISCORD')
             if check_bought:
