@@ -1608,3 +1608,84 @@ def sql_merchant_unlink_by_file_id(file_id: str):
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
     return None
+
+
+def sql_merchant_add_preview(ref_id: str, file_id: str, md5_hash: str, owner_id: str, original_filename:str, 
+    stored_name: str, filesize: float, filetype: str):
+    global conn, connProxy
+    time_now = int(time.time())
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ INSERT INTO `digi_preview` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
+                      `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
+            cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
+                              filesize, filetype, time_now))
+            conn.commit()
+            try:
+                openConnectionProxy()
+                with connProxy.cursor() as cur:
+                    sql = """ INSERT INTO `digi_preview` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
+                              `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
+                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
+                    cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
+                                      filesize, filetype, time_now))
+                    connProxy.commit()
+                    return True
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return False
+
+
+def sql_merchant_get_preview_by_ref(ref_id: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_preview WHERE `ref_id` = %s  
+                      ORDER BY `stored_date` DESC LIMIT 20 """
+            cur.execute(sql, (ref_id))
+            result = cur.fetchall()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_get_preview_files_by_file_id(file_id: str):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_preview WHERE `file_id` = %s LIMIT 1 """
+            cur.execute(sql, (file_id))
+            result = cur.fetchone()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_merchant_unlink_preview_by_file_id(file_id: str):
+    global conn, connProxy
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ DELETE FROM digi_preview WHERE `file_id` = %s LIMIT 1 """
+            cur.execute(sql, (file_id))
+            conn.commit()
+            try:
+                openConnectionProxy()
+                with connProxy.cursor() as cur:
+                    sql = """ DELETE FROM digi_preview WHERE `file_id` = %s LIMIT 1 """
+                    cur.execute(sql, (file_id))
+                    connProxy.commit()
+                    return True
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None

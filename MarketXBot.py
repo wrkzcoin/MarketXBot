@@ -129,6 +129,7 @@ bot_help_swap = "Swap balance amount between our bot to our bot"
 bot_help_merchant = "Manage your digital selling."
 bot_help_merchant_add = "Add a digital product for selling"
 bot_help_merchant_addfile = "Attach file to a selling product"
+bot_help_merchant_addpreview = "Attach a preview to a selling product"
 bot_help_merchant_detail = "View an item in detail by a ref number."
 bot_help_merchant_buy = "Buy a digital product using your balance."
 bot_help_merchant_mylist = "List of your active selling items."
@@ -136,6 +137,7 @@ bot_help_merchant_getitem = "Get an item that you already purchased."
 bot_help_merchant_sell = "Turn a pending to available to purchase by other."
 bot_help_merchant_unsell = "Turn a selling item to PENDING."
 bot_help_merchant_unlink = "Remove a file from an item"
+bot_help_merchant_unpreview = "Remove a preview from an item"
 bot_help_merchant_blist = "List items that you purchased."
 
 bot_help_about = "About MarketXBot."
@@ -784,6 +786,80 @@ async def addfile(ctx, ref_id: str):
         return
 
 
+@merchant.command(help=bot_help_merchant_addpreview)
+async def addpreview(ctx, ref_id: str):
+    global redis_pool, redis_conn
+    ref = ref_id.lower()
+    prefix = await get_guild_prefix(ctx)
+    get_item_ref = store.sql_merchant_get_ref(ref)
+    if get_item_ref:
+        if int(get_item_ref['owner_id']) != ctx.message.author.id:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You can not add preview to item **{ref}**.')
+            return
+        if get_item_ref['status'] == 'SUSPENDED':
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is **SUSPENDED**.')
+            return
+        # Check number of file if exceed
+        get_files_ref = store.sql_merchant_get_preview_by_ref(ref)
+        if get_files_ref and len(get_files_ref) >= config.Merchant_Setting.max_preview_per_item:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Item **{ref}** is already having {len(get_files_ref)} previews.'
+                           ' Can not add more.')
+            return
+        if not ctx.message.attachments:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} There is no attachment in your message for **{ref}**.')
+            return
+        else:
+            attachment = ctx.message.attachments[0]
+            allowed_ext = config.Merchant_Setting.allow_ext_preview
+            if not (attachment.filename.lower()).endswith(tuple(allowed_ext.split(","))):
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Attachment type rejected. Allowed: {allowed_ext}')
+                return
+            if attachment.size >= config.Merchant_Setting.max_size:
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} File too big.')
+                return
+            # check filename:
+            link = attachment.url # https://cdn.discordapp.com/attachments
+            if not re.match(r'^[a-zA-Z0-9\d.\-_]*$', attachment.filename.replace(" ", "-")):
+                await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Unacceptable file name.')
+                return
+            else:
+                attach_save_name = str(uuid.uuid4()) + '-' + attachment.filename.lower().replace(" ", "-")
+            try:
+                if link.startswith("https://cdn.discordapp.com/attachments"):
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(link) as resp:
+                            if resp.status == 200:
+                                if resp.headers["Content-Type"] not in ["image/gif", "image/png", "image/jpeg", "image/jpg", "video/mp4"]:
+                                    await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Unsupported format file.')
+                                    return
+                                else: 
+                                    with open(config.Merchant_Setting.path_preview + attach_save_name, 'wb') as f:
+                                        f.write(await resp.read())
+                                    file_ref = "preview_" + randomString(12)
+                                    md5_hash = get_md5_file(config.Merchant_Setting.path_preview + attach_save_name)
+                                    uploadfile = store.sql_merchant_add_preview(ref, file_ref, md5_hash, str(ctx.message.author.id), attachment.filename, 
+                                                                                attach_save_name, attachment.size, resp.headers["Content-Type"])
+                                    if uploadfile:
+                                        await ctx.message.add_reaction(EMOJI_OK_HAND)
+                                        await ctx.send(f'{ctx.author.mention} Successfully uploaded preview **{attachment.filename}** for selling item: **{ref}**.')
+                                        return
+                                    else:
+                                        await ctx.message.add_reaction(EMOJI_ERROR)
+                                        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Failed to upload and store.')
+                                        return
+            except Exception as e:
+                traceback.print_exc(file=sys.stdout)
+            return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Can not find selling item **{ref}**.')
+        return
+
+
 @merchant.command(help=bot_help_merchant_sell)
 async def sell(ctx, ref_id: str):
     global redis_pool, redis_conn
@@ -1101,6 +1177,33 @@ async def unlink(ctx, ref_file: str):
         return
 
 
+@merchant.command(help=bot_help_merchant_unpreview)
+async def unpreview(ctx, ref_preview: str):
+    global QUEUE_ADD_LIST, redis_pool, redis_conn
+    prefix = await get_guild_prefix(ctx)
+    ref_preview = ref_preview.lower()
+    check_file = store.sql_merchant_get_preview_files_by_file_id(ref_preview)
+    if check_file and int(check_file['owner_id']) == ctx.message.author.id:
+        # check if there is only one file left
+        ref = check_file['ref_id']
+        # check if file exist
+        if os.path.exists(config.Merchant_Setting.path_preview + check_file['stored_name']):
+            await ctx.message.add_reaction(EMOJI_OK_HAND)
+            store.sql_merchant_unlink_preview_by_file_id(ref_preview)
+            os.unlink(config.Merchant_Setting.path_preview + check_file['stored_name'])
+            msg = await ctx.send(f'{ctx.author.mention} Sucessfully remove preview **{ref_preview}** from selling item: **{ref}**.')
+            return
+        else:
+            await ctx.message.add_reaction(EMOJI_ERROR)
+            msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} Internal error to remove preview file_id **{ref_preview}**.')
+            return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        msg = await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} You do not permission to preview file: **{ref_preview}** or it does not exist.\n')
+        await msg.add_reaction(EMOJI_OK_BOX)
+        return
+
+
 @merchant.command(help=bot_help_merchant_detail)
 async def detail(ctx, ref: str):
     global QUEUE_ADD_LIST, redis_pool, redis_conn
@@ -1114,6 +1217,11 @@ async def detail(ctx, ref: str):
             embed.add_field(name="Amount", value='{}{}'.format(num_format_coin(get_item_ref['item_cost'], get_item_ref['coin_name']), get_item_ref['coin_name']), inline=True)
             embed.add_field(name="Creator", value='<@{}> (id: {})'.format(get_item_ref['owner_id'], get_item_ref['owner_id']), inline=False)
             embed.add_field(name="Description", value=get_item_ref['desc'], inline=False)
+            get_preview_ref = store.sql_merchant_get_preview_by_ref(ref)
+            if get_preview_ref and len(get_preview_ref) > 0:
+                embed.add_field(name="Previews", value='{}'.format(len(get_preview_ref)), inline=False)
+                for each in get_preview_ref:
+                    embed.add_field(name="Preview_ID", value='{}: {}'.format(each['file_id'], config.Merchant_Setting.static_link_preview + '/' + each['stored_name']), inline=False)
             if isinstance(get_item_ref['numb_bought'], int):
                 embed.add_field(name="Sold", value='{}'.format(get_item_ref['numb_bought']), inline=False)
             if get_files_ref and len(get_files_ref) > 0:
