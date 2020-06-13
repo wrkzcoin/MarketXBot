@@ -139,6 +139,7 @@ bot_help_merchant_unsell = "Turn a selling item to PENDING."
 bot_help_merchant_unlink = "Remove a file from an item"
 bot_help_merchant_unpreview = "Remove a preview from an item"
 bot_help_merchant_blist = "List items that you purchased."
+bot_help_merchant_search = "Search available items by keywords"
 
 bot_help_about = "About MarketXBot."
 bot_help_invite = "Invite link of bot to your server."
@@ -664,16 +665,52 @@ async def add(ctx):
                 if config.Merchant_Setting.desc_min <= len(waiting_descmsg.content) <= config.Merchant_Setting.desc_max:
                     desc = waiting_descmsg.content.strip()
                     msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
-                                         f'Description set: **{desc}**\n')
+                                         f'Description set: **{desc}**\n'
+                                         f'Next, please give keywords of this item (min. {config.Merchant_Setting.keyword_min}, '
+                                         f'max. {config.Merchant_Setting.keyword_max} chars, timeout {config.Merchant_Setting.keyword_timeout}s) '
+                                         'with space and comma:')
                 else:
                     await waiting_pricemsg.add_reaction(EMOJI_ERROR)
                     await ctx.send(f'ITEM ID: **{random_string}**\n'
                                    f'{ctx.author.mention} description too long or too short.')
+        # keyword
+        keyword = None
+        while keyword is None:
+            waiting_keywmsg = None
+            try:
+                waiting_keywmsg = await bot.wait_for('message', timeout=config.Merchant_Setting.keyword_timeout, check=lambda msg: msg.author == ctx.author)
+            except asyncio.TimeoutError:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during keyword input.')
+                return
+            if waiting_keywmsg is None:
+                # Delete redis and remove user from QUEUE
+                delete_queue_going(ctx.message.author.id)
+                await ctx.send(f'ITEM ID: **{random_string}**\n'
+                               f'{ctx.author.mention} too long. We assumed you are gave up during keyword input.')
+                return
+            else:
+                keyword = waiting_keywmsg.content.strip()
+                if not re.match(r'^[a-zA-Z0-9\d.\-_,; ]*$', keyword):
+                    await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                    await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                   f'{ctx.author.mention} Please use English keyword (alpha numeric a-z 1-9).')
+                else:
+                    if config.Merchant_Setting.keyword_min <= len(waiting_keywmsg.content) <= config.Merchant_Setting.keyword_max:
+                        msg = await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                             f'Keyword set: **{keyword}**\n')
+                    else:
+                        await waiting_pricemsg.add_reaction(EMOJI_ERROR)
+                        await ctx.send(f'ITEM ID: **{random_string}**\n'
+                                       f'{ctx.author.mention} Keyword too long or too short.')
         try:
             embed = discord.Embed(title="ITEM: {}".format(title), description="Here's your item briefing.", color=0x00ff00)
             embed.add_field(name="Amount", value=f'{num_format_coin(real_amount, COIN_NAME)}{COIN_NAME}', inline=True)
             embed.add_field(name="Seller", value=ctx.author.mention, inline=False)
             embed.add_field(name="Description", value=desc, inline=False)
+            embed.add_field(name="Keyword", value=keyword, inline=False)
             embed.add_field(name="Re-act", value=f'{EMOJI_THUMB_UP} to confirm, {EMOJI_THUMB_DOWN} to cancel', inline=False)
             embed.set_thumbnail(url=ctx.message.author.avatar_url)
             msg = await ctx.send(embed=embed)
@@ -684,7 +721,7 @@ async def add(ctx):
                 and str(reaction.emoji) in (EMOJI_THUMB_DOWN, EMOJI_THUMB_UP)
             reaction, user = await bot.wait_for('reaction_add', check=check)
             if str(reaction.emoji) == EMOJI_THUMB_UP:
-                add = store.sql_digi_order_add_data(random_string, title, desc, COIN_NAME, real_amount, real_amount*(1-config.Merchant_Setting.Fee_Margin),
+                add = store.sql_digi_order_add_data(random_string, title, desc, keyword, COIN_NAME, real_amount, real_amount*(1-config.Merchant_Setting.Fee_Margin),
                                                     get_decimal(COIN_NAME), str(ctx.message.author.id), 
                                                     '{}#{}'.format(ctx.message.author.name, ctx.message.author.discriminator), 'PENDING', 'DISCORD')
                 if add: 
@@ -988,6 +1025,52 @@ async def blist(ctx):
         await ctx.message.add_reaction(EMOJI_ERROR)
         await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} you did not buy any product.')
         return
+
+
+@merchant.command(aliases=['s'], help=bot_help_merchant_search)
+async def search(ctx, *, search_text):
+    search_term = None
+    if not re.match(r'^[a-zA-Z0-9\d.\-_,; ]*$', search_text):
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'**Searching**: {ctx.author.mention} Please use English keyword (alpha numeric a-z 1-9).')
+        return
+    if ',' in search_text:
+        search_term = search_text.split(",")
+    elif ';' in search_text:
+        search_term = search_text.split(",")
+    else:
+        search_term = search_text.split(" ")
+    if search_term and len(search_term) > 0:
+        keyword = ''
+        for each in search_term:
+            keyword += "+{} ".format(each)
+        keyword = keyword.strip()
+        searching = store.sql_merchant_search_by_word(str(ctx.message.author.id), keyword, 20)
+        if searching and len(searching) > 0:
+            await ctx.message.add_reaction(EMOJI_OK_HAND)
+            table_data = [
+                ['Ref', 'Title', 'Amount', 'Date']
+            ]
+            for each in searching:
+                table_data.append([each['ref_id'], each['title'][0:12], 
+                                   num_format_coin(each['item_cost'], each['coin_name'])+each['coin_name'], 
+                                   datetime.fromtimestamp(each['added_date'])])
+            table = AsciiTable(table_data)
+            table.padding_left = 1
+            table.padding_right = 1
+            msg = await ctx.send(f'**Searching** for **{search_text}**: {ctx.author.mention}, we found:\n'
+                                 f'```{table.table}```')
+            await msg.add_reaction(EMOJI_OK_BOX)
+            return
+        else:
+            await ctx.message.add_reaction(EMOJI_OK_HAND)
+            await ctx.send(f'**Searching** for **{search_text}**: {ctx.author.mention} Not found any result.')
+            return
+    else:
+        await ctx.message.add_reaction(EMOJI_ERROR)
+        await ctx.send(f'**Searching*** for **{search_text}**: {ctx.author.mention} Not able to search.')
+        return
+
 
 @merchant.command(help=bot_help_merchant_buy)
 async def buy(ctx, ref: str):

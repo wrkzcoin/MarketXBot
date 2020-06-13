@@ -1317,7 +1317,26 @@ def sql_addinfo_by_server(server_id: str, servername: str, prefix: str, rejoin: 
         traceback.print_exc(file=sys.stdout)
 
 
-def sql_digi_order_add_data(ref_id: str, title: str, desc: str, coin_name: str, item_cost: float, item_cost_after_fee: float, item_coin_decimal: int, 
+def sql_merchant_search_by_word(userid: str, search_key: str, limit: int=20):
+    global conn
+    try:
+        openConnection()
+        with conn.cursor() as cur:
+            sql = """ SELECT * FROM digi_order WHERE MATCH (`title`, `keyword`, `desc`) 
+                      AGAINST (%s) LIMIT """+str(limit)+"""; """
+            cur.execute(sql, (search_key))
+            result = cur.fetchall()
+
+            sql = """ INSERT INTO `digi_search` (`user_id`, `search_key`, `search_date`) VALUES (%s, %s, %s) """
+            cur.execute(sql, (userid, search_key, int(time.time())))
+            conn.commit()
+            return result
+    except Exception as e:
+        traceback.print_exc(file=sys.stdout)
+    return None
+
+
+def sql_digi_order_add_data(ref_id: str, title: str, desc: str, keyword: str, coin_name: str, item_cost: float, item_cost_after_fee: float, item_coin_decimal: int, 
     owner_id: str, owner_name: str, status: str='PENDING', sell_user_server: str='DISCORD'):
     global conn
     user_server = sell_user_server.upper()
@@ -1329,11 +1348,11 @@ def sql_digi_order_add_data(ref_id: str, title: str, desc: str, coin_name: str, 
     try:
         openConnection()
         with conn.cursor() as cur:
-            sql = """ INSERT INTO `digi_order` (`ref_id`, `title`, `desc`, `coin_name`, `item_cost`, 
+            sql = """ INSERT INTO `digi_order` (`ref_id`, `title`, `desc`, `keyword`, `coin_name`, `item_cost`, 
                       `item_cost_after_fee`, `item_coin_decimal`, `owner_id`, `owner_name`, 
                       `added_date`, `status`, `sell_user_server`)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
-            cur.execute(sql, (ref_id, title, desc, coin_name, item_cost, item_cost_after_fee,
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) """
+            cur.execute(sql, (ref_id, title, desc, keyword, coin_name, item_cost, item_cost_after_fee,
                               item_coin_decimal, owner_id, owner_name, int(time.time()),
                               status, user_server))
             conn.commit()
