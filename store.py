@@ -43,24 +43,11 @@ myconfigtipbot = {
     'autocommit':True
     }
 
-myconfig_proxyweb = {
-    'host': config.mysql_proxyweb.host,
-    'user':config.mysql_proxyweb.user,
-    'password':config.mysql_proxyweb.password,
-    'database':config.mysql_proxyweb.db,
-    'charset':'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor,
-    'autocommit':True
-    }
-
 connPool = pymysqlpool.ConnectionPool(size=4, name='connPool', **myconfig)
 conn = connPool.get_connection(timeout=5, retry_num=2)
 
 connPoolTip = pymysqlpool.ConnectionPool(size=2, name='connPoolTip', **myconfigtipbot)
 connTip = connPoolTip.get_connection(timeout=5, retry_num=2)
-
-connPoolProxy = pymysqlpool.ConnectionPool(size=2, name='connPoolProxy', **myconfig_proxyweb)
-connProxy = connPoolProxy.get_connection(timeout=5, retry_num=2)
 
 sys.path.append("..")
 
@@ -106,18 +93,6 @@ def openConnectionTip():
         connTip.ping(reconnect=True)  # reconnecting mysql
     except:
         print("ERROR: Unexpected error: Could not connect to MySql instance connPoolTip.")
-        sys.exit()
-
-
-# connPoolProxy 
-def openConnectionProxy():
-    global connProxy, connPoolProxy
-    try:
-        if connProxy is None:
-            connProxy = connPoolProxy.get_connection(timeout=5, retry_num=2)
-        connProxy.ping(reconnect=True)  # reconnecting mysql
-    except:
-        print("ERROR: Unexpected error: Could not connect to MySql instance connPoolProxy.")
         sys.exit()
 
 
@@ -1550,7 +1525,7 @@ def sql_merchant_get_buy_by_bought_userid(userid: str, buy_user_server: str='DIS
 
 def sql_merchant_add_file(ref_id: str, file_id: str, md5_hash: str, owner_id: str, original_filename:str, 
     stored_name: str, filesize: float, filetype: str):
-    global conn, connProxy
+    global conn
     time_now = int(time.time())
     try:
         openConnection()
@@ -1561,18 +1536,7 @@ def sql_merchant_add_file(ref_id: str, file_id: str, md5_hash: str, owner_id: st
             cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
                               filesize, filetype, time_now))
             conn.commit()
-            try:
-                openConnectionProxy()
-                with connProxy.cursor() as cur:
-                    sql = """ INSERT INTO `digi_files` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
-                              `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
-                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
-                    cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
-                                      filesize, filetype, time_now))
-                    connProxy.commit()
-                    return True
-            except Exception as e:
-                traceback.print_exc(file=sys.stdout)
+            return True
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
     return False
@@ -1608,22 +1572,14 @@ def sql_merchant_get_files_by_file_id(file_id: str):
 
 
 def sql_merchant_unlink_by_file_id(file_id: str):
-    global conn, connProxy
+    global conn
     try:
         openConnection()
         with conn.cursor() as cur:
             sql = """ DELETE FROM digi_files WHERE `file_id` = %s LIMIT 1 """
             cur.execute(sql, (file_id))
             conn.commit()
-            try:
-                openConnectionProxy()
-                with connProxy.cursor() as cur:
-                    sql = """ DELETE FROM digi_files WHERE `file_id` = %s LIMIT 1 """
-                    cur.execute(sql, (file_id))
-                    connProxy.commit()
-                    return True
-            except Exception as e:
-                traceback.print_exc(file=sys.stdout)
+            return True
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
     return None
@@ -1631,7 +1587,7 @@ def sql_merchant_unlink_by_file_id(file_id: str):
 
 def sql_merchant_add_preview(ref_id: str, file_id: str, md5_hash: str, owner_id: str, original_filename:str, 
     stored_name: str, filesize: float, filetype: str):
-    global conn, connProxy
+    global conn
     time_now = int(time.time())
     try:
         openConnection()
@@ -1642,18 +1598,7 @@ def sql_merchant_add_preview(ref_id: str, file_id: str, md5_hash: str, owner_id:
             cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
                               filesize, filetype, time_now))
             conn.commit()
-            try:
-                openConnectionProxy()
-                with connProxy.cursor() as cur:
-                    sql = """ INSERT INTO `digi_preview` (`ref_id`, `file_id`, `md5_hash`, `owner_id`, 
-                              `original_filename`, `stored_name`, `filesize`, `filetype`, `stored_date`)
-                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) """
-                    cur.execute(sql, (ref_id, file_id, md5_hash, owner_id, original_filename, stored_name,
-                                      filesize, filetype, time_now))
-                    connProxy.commit()
-                    return True
-            except Exception as e:
-                traceback.print_exc(file=sys.stdout)
+            return True
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
     return False
@@ -1689,22 +1634,14 @@ def sql_merchant_get_preview_files_by_file_id(file_id: str):
 
 
 def sql_merchant_unlink_preview_by_file_id(file_id: str):
-    global conn, connProxy
+    global conn
     try:
         openConnection()
         with conn.cursor() as cur:
             sql = """ DELETE FROM digi_preview WHERE `file_id` = %s LIMIT 1 """
             cur.execute(sql, (file_id))
             conn.commit()
-            try:
-                openConnectionProxy()
-                with connProxy.cursor() as cur:
-                    sql = """ DELETE FROM digi_preview WHERE `file_id` = %s LIMIT 1 """
-                    cur.execute(sql, (file_id))
-                    connProxy.commit()
-                    return True
-            except Exception as e:
-                traceback.print_exc(file=sys.stdout)
+            return True
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
     return None
