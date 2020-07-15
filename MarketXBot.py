@@ -2167,7 +2167,7 @@ async def sell_process(ctx, real_amount_sell: float, sell_ticker: str, real_amou
                                                                         num_format_coin(real_amount_buy, buy_ticker), buy_ticker,
                                                                         num_format_coin(fee_sell, sell_ticker), sell_ticker)
         await ctx.message.add_reaction(EMOJI_OK_BOX)
-        await ctx.send(f'{EMOJI_RED_NO} {ctx.author.mention} {get_message}')
+        await ctx.send(f'{ctx.author.mention} {get_message}')
         # add message to trade channel as well.
         if ctx.message.channel.id != NOTIFY_CHAN or isinstance(ctx.message.channel, discord.DMChannel) == True:
             botLogChan = bot.get_channel(id=NOTIFY_CHAN)
